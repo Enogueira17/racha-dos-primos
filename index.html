@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>RACHA DOS PRIMOS</title>
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -1174,35 +1177,102 @@ const SEED = [
 ];
 
 // Load from localStorage or seed
-function loadDB() {
-  const raw = localStorage.getItem('racha_stats');
-  const initialized = localStorage.getItem('racha_initialized');
+// ═══════════════════════════════════════════════════
+//  FIREBASE CONFIG & INIT
+// ═══════════════════════════════════════════════════
+const firebaseConfig = {
+  apiKey: "AIzaSyCRSP6K54WJnXmw-ulayJiDfeWrwMEKAF8",
+  authDomain: "racha-dos-primos.firebaseapp.com",
+  projectId: "racha-dos-primos",
+  storageBucket: "racha-dos-primos.firebasestorage.app",
+  messagingSenderId: "64527088747",
+  appId: "1:64527088747:web:1053fe21dd146ce096852e"
+};
 
-  if (raw) {
-    const saved = JSON.parse(raw);
-    // Só mescla o seed se NUNCA foi inicializado antes (primeira vez absoluta)
-    if (!initialized) {
-      let updated = false;
-      SEED.forEach(p => {
-        if (!saved[p.n]) { saved[p.n] = {...p}; updated = true; }
-      });
-      if (updated) localStorage.setItem('racha_stats', JSON.stringify(saved));
-      localStorage.setItem('racha_initialized', '1');
-    }
-    // Após isso, o que está salvo é verdade absoluta — seed não interfere mais
-    return saved;
-  }
+const FIREBASE_AVAILABLE = typeof firebase !== 'undefined';
+let firestore = null;
+let DOC_REF = null;
 
-  // Primeira vez: carrega o seed e marca como inicializado
-  const db = {};
-  SEED.forEach(p => { db[p.n] = {...p}; });
-  localStorage.setItem('racha_stats', JSON.stringify(db));
-  localStorage.setItem('racha_initialized', '1');
-  return db;
+if (FIREBASE_AVAILABLE) {
+  firebase.initializeApp(firebaseConfig);
+  firestore = firebase.firestore();
+  DOC_REF = firestore.collection('racha').doc('stats');
 }
-function saveDB(db) { localStorage.setItem('racha_stats', JSON.stringify(db)); }
 
-let DB = loadDB();
+// ═══════════════════════════════════════════════════
+//  DB — FIREBASE + LOCALSTORAGE COMO CACHE
+// ═══════════════════════════════════════════════════
+let DB = {};
+let dbReady = false;
+
+function showLoadingOverlay(msg) {
+  let el = document.getElementById('fb-overlay');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'fb-overlay';
+    el.style.cssText = `position:fixed;inset:0;background:rgba(5,8,13,0.92);z-index:9999;
+      display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;`;
+    el.innerHTML = `
+      <div style="font-family:'Bebas Neue',sans-serif;font-size:48px;letter-spacing:6px;
+        background:linear-gradient(135deg,#42a5f5,#fff);-webkit-background-clip:text;
+        -webkit-text-fill-color:transparent;background-clip:text;">RACHA DOS PRIMOS</div>
+      <div id="fb-overlay-msg" style="font-size:14px;color:#4a6580;letter-spacing:2px;text-transform:uppercase;"></div>
+      <div style="width:48px;height:48px;border:3px solid #1e3a5a;border-top-color:#42a5f5;
+        border-radius:50%;animation:spin .8s linear infinite;"></div>
+      <style>@keyframes spin{to{transform:rotate(360deg)}}</style>`;
+    document.body.appendChild(el);
+  }
+  document.getElementById('fb-overlay-msg').textContent = msg || 'Carregando...';
+  el.style.display = 'flex';
+}
+
+function hideLoadingOverlay() {
+  const el = document.getElementById('fb-overlay');
+  if (el) el.style.display = 'none';
+}
+
+async function loadDB() {
+  showLoadingOverlay('Conectando ao banco de dados...');
+  try {
+    const doc = await DOC_REF.get();
+    if (doc.exists) {
+      DB = doc.data().players || {};
+    } else {
+      // Primeira vez: sobe o seed para o Firebase
+      showLoadingOverlay('Inicializando dados...');
+      DB = {};
+      SEED.forEach(p => { DB[p.n] = {...p}; });
+      await DOC_REF.set({ players: DB });
+    }
+    // Cache local
+    localStorage.setItem('racha_cache', JSON.stringify(DB));
+  } catch(err) {
+    console.warn('Firebase offline, usando cache local:', err);
+    const cache = localStorage.getItem('racha_cache');
+    DB = cache ? JSON.parse(cache) : {};
+    if (Object.keys(DB).length === 0) {
+      SEED.forEach(p => { DB[p.n] = {...p}; });
+    }
+  }
+  dbReady = true;
+  hideLoadingOverlay();
+  renderHomeStats();
+  renderPlayerList();
+}
+
+async function saveDB(db) {
+  DB = db;
+  // Cache local imediato
+  localStorage.setItem('racha_cache', JSON.stringify(db));
+  try {
+    await DOC_REF.set({ players: db });
+  } catch(err) {
+    console.warn('Erro ao salvar no Firebase:', err);
+  }
+}
+
+// Inicia carregamento
+loadDB();
 
 // Toggles definition
 const TOGGLES = [
@@ -2462,14 +2532,12 @@ function cancelImport() {
   document.getElementById('import-error').style.display='none';
 }
 
-function confirmImport() {
+async function confirmImport() {
   if (!importedData) return;
-  DB = importedData;
-  saveDB(DB);
-  // Marca como inicializado para o seed nunca mais interferir
-  localStorage.setItem('racha_initialized', '1');
-
   document.getElementById('import-preview').style.display='none';
+  showLoadingOverlay('Importando dados para o Firebase...');
+  await saveDB(importedData);
+  hideLoadingOverlay();
   const ok = document.getElementById('import-ok');
   ok.style.display='block';
   setTimeout(()=>{ location.reload(); }, 1800);
@@ -2606,10 +2674,8 @@ function saveNewPlayer() {
 }
 
 // ═══════════════════════════════════════════════════
-//  INIT
+//  INIT — feito pelo loadDB() assíncrono acima
 // ═══════════════════════════════════════════════════
-renderHomeStats();
-renderPlayerList();
 </script>
 </body>
 </html>
