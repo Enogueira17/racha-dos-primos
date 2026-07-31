@@ -1176,20 +1176,28 @@ const SEED = [
 // Load from localStorage or seed
 function loadDB() {
   const raw = localStorage.getItem('racha_stats');
+  const initialized = localStorage.getItem('racha_initialized');
+
   if (raw) {
     const saved = JSON.parse(raw);
-    // Mescla novos jogadores do seed sem sobrescrever dados já salvos
-    let updated = false;
-    SEED.forEach(p => {
-      if (!saved[p.n]) { saved[p.n] = {...p}; updated = true; }
-    });
-    if (updated) localStorage.setItem('racha_stats', JSON.stringify(saved));
+    // Só mescla o seed se NUNCA foi inicializado antes (primeira vez absoluta)
+    if (!initialized) {
+      let updated = false;
+      SEED.forEach(p => {
+        if (!saved[p.n]) { saved[p.n] = {...p}; updated = true; }
+      });
+      if (updated) localStorage.setItem('racha_stats', JSON.stringify(saved));
+      localStorage.setItem('racha_initialized', '1');
+    }
+    // Após isso, o que está salvo é verdade absoluta — seed não interfere mais
     return saved;
   }
-  // Primeira vez: salva o seed imediatamente
+
+  // Primeira vez: carrega o seed e marca como inicializado
   const db = {};
   SEED.forEach(p => { db[p.n] = {...p}; });
   localStorage.setItem('racha_stats', JSON.stringify(db));
+  localStorage.setItem('racha_initialized', '1');
   return db;
 }
 function saveDB(db) { localStorage.setItem('racha_stats', JSON.stringify(db)); }
@@ -2458,6 +2466,8 @@ function confirmImport() {
   if (!importedData) return;
   DB = importedData;
   saveDB(DB);
+  // Marca como inicializado para o seed nunca mais interferir
+  localStorage.setItem('racha_initialized', '1');
 
   document.getElementById('import-preview').style.display='none';
   const ok = document.getElementById('import-ok');
